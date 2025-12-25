@@ -1,0 +1,249 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Capacitor Invader</title>
+<style>
+  body {
+    margin: 0;
+    background: linear-gradient(180deg, #001b12, #000);
+    color: #9affc9;
+    font-family: Consolas, monospace;
+    text-align: center;
+  }
+  canvas {
+    background:
+      linear-gradient(#0a2 1px, transparent 1px),
+      linear-gradient(90deg, #0a2 1px, transparent 1px),
+      radial-gradient(circle at top, #033, #000);
+    background-size: 40px 40px, 40px 40px, cover;
+    display: block;
+    margin: 20px auto;
+    border-radius: 12px;
+    box-shadow: 0 0 20px #0f8;
+  }
+</style>
+</head>
+<body>
+
+<h1>🏰⚡ Capacitor Invader ⚡</h1>
+<p>← → 移動 / Space 発射</p>
+<canvas id="game" width="520" height="640"></canvas>
+<p id="score">Score: 0</p>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+// ===== 効果音 =====
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function beep(freq, time=0.12) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.frequency.value = freq;
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + time);
+  osc.stop(audioCtx.currentTime + time);
+}
+
+// ===== プレイヤー（お城） =====
+const player = {
+  x: 240,
+  y: 570,
+  w: 40,
+  h: 30,
+  speed: 6
+};
+
+// ===== 弾・爆発 =====
+let bullets = [];
+let sparks = [];
+
+// ===== 敵（コンデンサ） =====
+let enemies = [];
+const rows = 4;
+const cols = 7;
+let enemyDir = 1;
+
+for (let r = 0; r < rows; r++) {
+  for (let c = 0; c < cols; c++) {
+    enemies.push({
+      x: 80 + c * 60,
+      y: 80 + r * 55,
+      w: 26,
+      h: 36,
+      alive: true
+    });
+  }
+}
+
+// ===== 入力 =====
+const keys = {};
+document.addEventListener("keydown", e => keys[e.code] = true);
+document.addEventListener("keyup", e => keys[e.code] = false);
+
+// ===== スコア =====
+let score = 0;
+
+// ===== 描画 =====
+function drawCastle(p) {
+  // 本体
+  ctx.fillStyle = "#888";
+  ctx.fillRect(p.x, p.y, p.w, p.h);
+
+  // 左右の塔
+  ctx.fillStyle = "#aaa";
+  ctx.fillRect(p.x + 4, p.y - 10, 8, 10);
+  ctx.fillRect(p.x + p.w - 12, p.y - 10, 8, 10);
+
+  // 中央砲台
+  ctx.fillStyle = "#666";
+  ctx.fillRect(p.x + 16, p.y - 14, 8, 14);
+}
+
+function drawCapacitor(e) {
+  const cx = e.x + e.w / 2;
+  const bottom = e.y + e.h;
+
+  // ===== リード線（2本） =====
+  ctx.strokeStyle = "#ccc";
+  ctx.lineWidth = 2;
+
+  ctx.beginPath();
+  ctx.moveTo(cx - 4, bottom);
+  ctx.lineTo(cx - 6, bottom + 12);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(cx + 4, bottom);
+  ctx.lineTo(cx + 6, bottom + 12);
+  ctx.stroke();
+
+  // ===== コンデンサ本体 =====
+  ctx.fillStyle = "#b00000";
+  ctx.beginPath();
+  ctx.ellipse(
+    cx,
+    e.y + e.h / 2,
+    e.w / 2,
+    e.h / 2,
+    0,
+    0,
+    Math.PI * 2
+  );
+  ctx.fill();
+
+  // ハイライト
+  ctx.strokeStyle = "#ff9a9a";
+  ctx.beginPath();
+  ctx.moveTo(e.x + e.w * 0.3, e.y + 8);
+  ctx.lineTo(e.x + e.w * 0.7, e.y + 8);
+  ctx.stroke();
+
+  // 極性マーク
+  ctx.strokeStyle = "#fff";
+  ctx.beginPath();
+  ctx.moveTo(e.x + e.w * 0.68, e.y + 10);
+  ctx.lineTo(e.x + e.w * 0.68, e.y + e.h - 10);
+  ctx.stroke();
+}
+
+function drawSpark(s) {
+  ctx.fillStyle = `rgba(255,220,120,${s.life})`;
+  ctx.beginPath();
+  ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// ===== 更新 =====
+function update() {
+  if (keys["ArrowLeft"]) player.x -= player.speed;
+  if (keys["ArrowRight"]) player.x += player.speed;
+  player.x = Math.max(0, Math.min(canvas.width - player.w, player.x));
+
+  if (keys["Space"] && bullets.length < 6) {
+    bullets.push({ x: player.x + 18, y: player.y });
+    beep(800);
+    keys["Space"] = false;
+  }
+
+  bullets.forEach(b => b.y -= 9);
+  bullets = bullets.filter(b => b.y > 0);
+
+  let edge = false;
+  enemies.forEach(e => {
+    if (!e.alive) return;
+    e.x += enemyDir * 1.2;
+    if (e.x < 20 || e.x + e.w > canvas.width - 20) edge = true;
+  });
+
+  if (edge) {
+    enemyDir *= -1;
+    enemies.forEach(e => e.y += 10);
+  }
+
+  bullets.forEach(b => {
+    enemies.forEach(e => {
+      if (
+        e.alive &&
+        b.x < e.x + e.w &&
+        b.x + 4 > e.x &&
+        b.y < e.y + e.h &&
+        b.y + 10 > e.y
+      ) {
+        e.alive = false;
+        b.y = -100;
+
+        for (let i = 0; i < 10; i++) {
+          sparks.push({
+            x: e.x + e.w / 2,
+            y: e.y + e.h / 2,
+            r: 2,
+            life: 1
+          });
+        }
+
+        score += 150;
+        document.getElementById("score").textContent = "Score: " + score;
+        beep(220, 0.2);
+      }
+    });
+  });
+
+  sparks.forEach(s => {
+    s.r += 1.5;
+    s.life -= 0.07;
+  });
+  sparks = sparks.filter(s => s.life > 0);
+}
+
+// ===== 描画 =====
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  drawCastle(player);
+
+  ctx.fillStyle = "#9ff";
+  bullets.forEach(b => ctx.fillRect(b.x, b.y, 4, 12));
+
+  enemies.forEach(e => {
+    if (e.alive) drawCapacitor(e);
+  });
+
+  sparks.forEach(drawSpark);
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+
+</body>
+</html>
